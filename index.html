@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teachable Machine Pose AI</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;600;700&display=swap');
+        body { font-family: 'Pretendard', sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col items-center justify-center p-6">
+
+    <div class="max-w-4xl w-full bg-white rounded-2xl shadow-xl overflow-hidden grid grid-cols-1 md:grid-cols-3">
+        
+        <div class="p-6 bg-slate-900 text-slate-200 flex flex-col justify-between">
+            <div>
+                <div class="flex items-center gap-2 text-sky-400 font-semibold text-sm tracking-wider uppercase mb-1">
+                    <i class="fa-solid fa-robot"></i> Advanced Pose AI
+                </div>
+                <h1 class="text-xl font-bold text-white mb-6">Pose Model 디렉터</h1>
+                
+                <div class="space-y-4 text-xs text-slate-400">
+                    <h3 class="text-sm font-semibold text-slate-200"><i class="fa-solid fa-circle-info mr-1"></i> 올바른 사용 방법</h3>
+                    <p class="leading-relaxed"><strong class="text-slate-200">1. AI Start 클릭:</strong> 고프레임 모드로 실시간 분석이 시작됩니다.</p>
+                    <p class="leading-relaxed"><strong class="text-slate-200">2. AI Stop 클릭:</strong> 카메라가 꺼지며, 파란 트래커 잔상도 즉시 제거됩니다.</p>
+                    <p class="leading-relaxed"><strong class="text-slate-200">3. 70% 정확도 기준:</strong> 포즈 정확도가 70% 미만일 때 경고가 작동합니다.</p>
+                </div>
+            </div>
+            
+            <div class="text-xxs text-slate-500 pt-6 border-t border-slate-800">
+                <span>Developer. 이윤우</span>
+            </div>
+        </div>
+
+        <div class="md:col-span-2 p-6 flex flex-col justify-between relative">
+            
+            <div id="warning-banner" class="hidden absolute top-4 left-6 right-6 bg-amber-50 border-l-4 border-amber-500 p-3 rounded shadow-sm flex items-center gap-3 transition-all duration-300 z-10">
+                <i class="fa-solid fa-triangle-exclamation text-amber-500 text-lg animate-pulse"></i>
+                <div>
+                    <p class="text-xs font-bold text-amber-800">포즈 매칭률 저하 경고</p>
+                    <p class="text-xxs text-amber-600">현재 포즈의 정확도가 70% 이하입니다. 자세를 올바르게 잡아주세요.</p>
+                </div>
+            </div>
+
+            <div class="flex justify-between items-center mb-4 mt-12 md:mt-0">
+                <h2 class="font-bold text-lg text-slate-700">실시간 모니터링</h2>
+                <div class="flex gap-2">
+                    <button type="button" id="start-btn" onclick="init()" class="px-3 py-2 bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs rounded-lg shadow-md transition-all flex items-center gap-2 cursor-pointer">
+                        <i class="fa-solid fa-play"></i> AI Start
+                    </button>
+                    <button type="button" id="stop-btn" onclick="stopWebcam()" class="px-3 py-2 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs rounded-lg shadow-md transition-all flex items-center gap-2 cursor-pointer opacity-50 cursor-not-allowed" disabled>
+                        <i class="fa-solid fa-stop"></i> AI Stop
+                    </button>
+                </div>
+            </div>
+
+            <div class="flex justify-center items-center bg-slate-100 rounded-xl overflow-hidden border border-slate-200 aspect-square max-w-[340px] mx-auto w-full relative group">
+                <canvas id="canvas" class="w-full h-full object-cover"></canvas>
+                <div id="loading-overlay" class="hidden absolute inset-0 bg-slate-900/80 flex flex-col items-center justify-center text-white gap-3">
+                    <i class="fa-solid fa-spinner animate-spin text-2xl text-sky-400"></i>
+                    <p class="text-xs font-medium">포즈 인식 시스템 가동 중...</p>
+                </div>
+            </div>
+
+            <div class="mt-6">
+                <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Classification Score</h3>
+                <div id="label-container" class="space-y-3">
+                    </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+    
+    <script type="text/javascript">
+        const URL = "https://teachablemachine.withgoogle.com/models/zLquWAhso/";
+        let model, webcam, ctx, labelContainer, maxPredictions;
+        let isRunning = false;
+        let animationFrameId = null;
+
+        async function init() {
+            if(isRunning) return; 
+            
+            const startBtn = document.getElementById("start-btn");
+            const stopBtn = document.getElementById("stop-btn");
+            const loadingOverlay = document.getElementById("loading-overlay");
+            
+            startBtn.disabled = true;
+            startBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            loadingOverlay.classList.remove('hidden');
+
+            try {
+                if (!model) {
+                    model = await tmPose.load(URL + "model.json", URL + "metadata.json");
+                }
+                maxPredictions = model.getTotalClasses();
+
+                const size = 340; 
+                webcam = new tmPose.Webcam(size, size, true); // flip = true
+                
+                await webcam.setup(); 
+                await webcam.play();
+                
+                loadingOverlay.classList.add('hidden');
+                startBtn.innerHTML = `<i class="fa-solid fa-circle-dot text-emerald-400 animate-pulse"></i> Running`;
+                
+                stopBtn.disabled = false;
+                stopBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+
+                isRunning = true;
+                animationFrameId = window.requestAnimationFrame(loop);
+
+                const canvas = document.getElementById("canvas");
+                canvas.width = size; canvas.height = size;
+                ctx = canvas.getContext("2d");
+                
+                labelContainer = document.getElementById("label-container");
+                labelContainer.innerHTML = ""; 
+                for (let i = 0; i < maxPredictions; i++) { 
+                    const itemWrapper = document.createElement("div");
+                    itemWrapper.className = "space-y-1";
+                    itemWrapper.innerHTML = `
+                        <div class="flex justify-between text-xs font-semibold text-slate-600">
+                            <span class="class-name">-</span>
+                            <span class="class-percentage">0%</span>
+                        </div>
+                        <div class="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                            <div class="progress-bar bg-sky-500 h-2 rounded-full transition-all duration-75" style="width: 0%"></div>
+                        </div>
+                    `;
+                    labelContainer.appendChild(itemWrapper);
+                }
+            } catch (error) {
+                console.error(error);
+                alert("모델 로드 실패 또는 웹캠 권한 에러가 발생했습니다.");
+                resetUI();
+            }
+        }
+
+        async function loop(timestamp) {
+            if(!isRunning) return; // [수정된 로직] 이 한 줄이 핵심입니다. STOP 상태면 즉시 루프 중단.
+            
+            webcam.update();
+            
+            // 영상을 먼저 그림
+            if (webcam.canvas) {
+                ctx.drawImage(webcam.canvas, 0, 0);
+            }
+            
+            await predict(); // 포즈 데이터 추론 및 그리기
+            
+            animationFrameId = window.requestAnimationFrame(loop);
+        }
+
+        async function predict() {
+            if(!webcam.canvas) return;
+            
+            const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
+            const prediction = await model.predict(posenetOutput);
+
+            let highestProbability = 0;
+            const warningBanner = document.getElementById("warning-banner");
+
+            // --- 라벨 업데이트 로직 ---
+            for (let i = 0; i < maxPredictions; i++) {
+                const probability = prediction[i].probability;
+                const percentage = (probability * 100).toFixed(0);
+
+                if (probability > highestProbability) {
+                    highestProbability = probability;
+                }
+
+                const targetRow = labelContainer.childNodes[i];
+                if(targetRow && targetRow.querySelector) {
+                    targetRow.querySelector('.class-name').innerText = prediction[i].className;
+                    targetRow.querySelector('.class-percentage').innerText = percentage + "%";
+                    
+                    const bar = targetRow.querySelector('.progress-bar');
+                    bar.style.width = percentage + "%";
+                    
+                    if(probability >= 0.7) {
+                        bar.className = "progress-bar bg-emerald-500 h-2 rounded-full transition-all duration-75";
+                    } else if(probability >= 0.4) {
+                        bar.className = "progress-bar bg-amber-500 h-2 rounded-full transition-all duration-75";
+                    } else {
+                        bar.className = "progress-bar bg-rose-500 h-2 rounded-full transition-all duration-75";
+                    }
+                }
+            }
+            // ------------------------
+
+            // [경고 배너 처리]
+            if (highestProbability < 0.7) {
+                warningBanner.classList.remove('hidden');
+            } else {
+                warningBanner.classList.add('hidden');
+            }
+
+            // [포즈 트래커 그리기]
+            // --- [핵심 수정] ---
+            // 루프 시작부에서 isRunning을 체크하지만, predict 연산 도중에 멈춘 경우를 대비해
+            // 그리기 직전에 다시 한번 isRunning 상태를 체크합니다.
+            if (pose && isRunning) {
+                const minPartConfidence = 0.5;
+                tmPose.drawKeypoints(pose.keypoints, minPartConfidence, ctx);
+                tmPose.drawSkeleton(pose.keypoints, minPartConfidence, ctx);
+            }
+        }
+
+        // [기능 수정] 카메라 및 트래커 초기화 함수
+        function stopWebcam() {
+            // 1. 상태 즉시 변경 (그리기 루프 차단 시작)
+            isRunning = false;
+            
+            // 2. 루프 예약 취소
+            if (animationFrameId) {
+                window.cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
+            }
+
+            // 3. 카메라 완전히 끄기
+            if (webcam) {
+                webcam.stop();
+                if (webcam.stream) {
+                    webcam.stream.getTracks().forEach(track => track.stop());
+                }
+                // [추가된 수정] 웹캠 객체 자체를 null로 만들어 predict 내부의 null 체크가 작동하게 함
+                webcam = null; 
+            }
+
+            // 4. 캔버스 즉시 초기화 (트래커 잔상 제거)
+            if (ctx) {
+                // 검은색 또는 흰색 배경으로 완전히 덮어씌웁니다.
+                ctx.fillStyle = "#F8FAFC"; // bg-slate-50 색상
+                ctx.fillRect(0, 0, 340, 340);
+            }
+
+            // 5. UI 요소 초기화
+            document.getElementById("warning-banner").classList.add('hidden');
+            if(labelContainer) labelContainer.innerHTML = "";
+            
+            resetUI();
+        }
+
+        function resetUI() {
+            const startBtn = document.getElementById("start-btn");
+            const stopBtn = document.getElementById("stop-btn");
+            
+            startBtn.disabled = false;
+            startBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            startBtn.innerHTML = `<i class="fa-solid fa-play"></i> AI Start`;
+            
+            stopBtn.disabled = true;
+            stopBtn.classList.add('opacity-50', 'cursor-not-allowed');
+        }
+    </script>
+</body>
+</html>
